@@ -1,0 +1,529 @@
+---
+title: "Key Factors in Pricing Private Room Rentals in Manhattan, NYC"
+subtitle: "A Multiple Linear Regression Analysis"
+author: "Francisco Rezzonico"
+date: last-modified
+date-format: "MMMM D, YYYY"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-title: "Contents"
+    toc-location: left
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    fig-width: 10
+    fig-height: 6
+    fig-align: center
+    theme: cosmo
+
+execute:
+  echo: true
+  warning: false
+  message: false
+
+editor: visual 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+```
+
+```{r packages}
+# Load required packages for data import, cleaning, visualization,
+# regression modeling, diagnostics, reporting, and power analysis.
+library(car)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(lmtest)
+library(plotly)
+library(pwr)
+library(readxl)
+library(stargazer)
+library(summarytools)
+library(tidyr)
+```
+
+# Data Import
+
+The analysis uses the NYC Property Rental Data dataset. The source file is stored in the repository's `data/raw/` directory and imported directly to ensure the report can be rendered reproducibly.
+
+```{r import-data, results="hide",echo=FALSE}
+# Import the original NYC rental listings data.
+data_path <- "../data/nyc_property_rental_raw_data.xlsx"
+
+stopifnot(file.exists(data_path))
+
+ny_rental_raw <- read_excel(data_path)
+
+# Inspect the imported data structure and dimensions.
+glimpse(ny_rental_raw)
+dim(ny_rental_raw)
+```
+
+# Data cleaning and missing-value treatment
+
+Missing values were reviewed before subsetting the data. Based on the dataset documentation, missing values for `CANCELLATION_POLICY` and `MINIMUM_NIGHTS` were interpreted as “no set policy” and zero nights, respectively. Observations with missing values in other fields were removed because they could not support the planned regression analysis.
+
+```{r clean-missing-data}
+# Create a working copy so the raw imported data remain unchanged.
+ny_rental <- ny_rental_raw
+
+# Record the initial number of observations and missing values.
+n_raw <- nrow(ny_rental)
+missing_values_raw <- sum(is.na(ny_rental))
+
+# Apply documented missing-value rules.
+ny_rental <- ny_rental |>
+  mutate(
+    CANCELLATION_POLICY = replace_na(
+      CANCELLATION_POLICY,
+      "No set policy"
+    ),
+    MINIMUM_NIGHTS = replace_na(MINIMUM_NIGHTS, 0)
+  )
+
+# Remove observations missing values in any remaining variables.
+ny_rental <- ny_rental |>
+  drop_na()
+
+# Document the effect of cleaning.
+n_clean <- nrow(ny_rental)
+missing_values_clean <- sum(is.na(ny_rental))
+
+data_cleaning_summary <- tibble(
+  Metric = c(
+    "Observations before cleaning",
+    "Observations after cleaning",
+    "Observations removed",
+    "Missing values before cleaning",
+    "Missing values after cleaning"
+  ),
+  Value = c(
+    n_raw,
+    n_clean,
+    n_raw - n_clean,
+    missing_values_raw,
+    missing_values_clean
+  )
+)
+
+kable(
+  data_cleaning_summary,
+  caption = "Data-cleaning summary"
+)
+```
+
+# Sample selection
+
+The analysis is limited to private-room listings in Manhattan’s Midtown, West Village, Nolita, SoHo, and Upper East Side neighborhoods. These neighborhoods were selected because of their relevance to the Manhattan tourist-accommodation market. Restricting the dataset to this population aligns the analytical sample with the project’s pricing objective.
+
+```{r select-analysis-sample}
+# Retain only the fields required for sample selection, descriptive analysis,
+# regression modeling, and model diagnostics.
+analysis_variables <- c(
+  "NYC_BOROUGH",
+  "NEIGHBORHOOD",
+  "ROOM_TYPE",
+  "PRICE",
+  "SERVICE_FEE",
+  "NUMBER_OF_REVIEWS",
+  "MINIMUM_NIGHTS",
+  "CANCELLATION_POLICY"
+)
+
+ny_rental <- ny_rental |>
+  select(all_of(analysis_variables))
+
+# Define the target Manhattan neighborhoods.
+target_neighborhoods <- c(
+  "Midtown",
+  "West Village",
+  "Nolita",
+  "SoHo",
+  "Upper East Side"
+)
+
+# Restrict the dataset to private-room listings in the selected neighborhoods.
+ny_rental <- ny_rental |>
+  filter(
+    NYC_BOROUGH == "Manhattan",
+    NEIGHBORHOOD %in% target_neighborhoods,
+    ROOM_TYPE == "Private room"
+  )
+
+# Confirm the final sample size and its neighborhood composition.
+sample_summary <- ny_rental |>
+  count(NEIGHBORHOOD, name = "Listings") |>
+  arrange(desc(Listings))
+
+knitr::kable(
+  sample_summary,
+  caption = "Private-room listings in the analysis sample by neighborhood"
+)
+
+nrow(ny_rental)  
+```
+
+# Minimum-stay outlier treatment
+
+Minimum-night requirements were examined for unusually large values that could disproportionately influence the regression analysis. Observations above the upper Tukey fence—defined as (Q_3 + 1.5 \times IQR)—were excluded. This rule preserves listings with typical minimum-stay requirements while removing extreme values that are less representative of short-term tourist accommodation.
+
+```{r treat-minimum-night-outliers}
+# Calculate IQR-based upper fence ofr minimum-night requirements.
+minimum_nights_q1 <- quantile(ny_rental$MINIMUM_NIGHTS, 0.25, na.rm = TRUE)
+minimum_nights_q3 <- quantile(ny_rental$MINIMUM_NIGHTS, 0.75, na.rm = TRUE)
+minimum_nights_iqr <- IQR(ny_rental$MINIMUM_NIGHTS, na.rm = TRUE)
+
+minimum_nights_upper_fence <- minimum_nights_q3 + 1.5 * minimum_nights_iqr
+
+# Record the sample size before treating outliers.
+n_before_outlier_treatment <- nrow(ny_rental)
+
+# Retain listings with minimum-night requirements at or below the upper fence.
+ny_rental <- ny_rental |>
+  filter(MINIMUM_NIGHTS <= minimum_nights_upper_fence)
+
+# Summarize the effect of the outlier-treatment rule.
+outlier_treatment_summary <- tibble(
+  Metric = c(
+    "First quartile (Q1)",
+    "Third quartile (Q3)",
+    "Interquartile range (IQR)",
+    "Upper outlier fence",
+    "Observations before treatment",
+    "Observations after treatment",
+    "Observations removed"
+  ),
+  Value = c(
+    minimum_nights_q1,
+    minimum_nights_q3,
+    minimum_nights_iqr,
+    minimum_nights_upper_fence,
+    n_before_outlier_treatment,
+    nrow(ny_rental),
+    n_before_outlier_treatment - nrow(ny_rental)
+  )
+)
+
+knitr::kable(
+  outlier_treatment_summary,
+  digits = 2,
+  caption = "Minimum-night outlier-treatment summary"
+)
+```
+
+# Final analytical dataset
+
+After applying the missing-value rules, restricting the data to the target Manhattan private-room market, and treating extreme minimum-stay requirements, the resulting dataset serves as the final analytical sample for all subsequent descriptive, visualization, and regression analyses.
+
+The cleaned dataset is saved to the repository to support reproducibility and allow later analyses to begin from the documented analytical sample.
+
+```{r save-clean-data}
+# Save the cleaned analytical sample for reproducible downstream analysis.
+clean_data_path <- "../data/manhattan_private_room_listings_clean.csv"
+
+# Export the final cleaned dataset without row names.
+write.csv(
+  ny_rental,
+  file = clean_data_path,
+  row.names = FALSE
+)
+
+# Confirm that the clean dataset was saved successfully.
+stopifnot(file.exists(clean_data_path))
+
+# Display the final number of listings and variables.
+final_sample_summary <- tibble(
+  Metric = c("Listings", "Variables"),
+  Value = c(nrow(ny_rental), ncol(ny_rental))
+)
+
+knitr::kable(
+  final_sample_summary,
+  caption = "Final analytical dataset summary"
+)
+```
+
+# Exploratory data analysis
+
+Exploratory visualizations were used to examine the distributions of the model variables and identify potential relationships between nightly price and its candidate predictors. These findings provide context for the regression model but do not establish causal effects.
+
+```{r exploratory-data-analysis, fig.width=10, fig.height=8}
+# Visualize the distribution of nightly private-room prices.
+ggplot(ny_rental, aes(x = PRICE)) +
+  geom_histogram(
+    binwidth = 50,
+    fill = "#2C7FB8",
+    color = "white",
+    boundary = 0
+  ) +
+  labs(
+    title = "Distribution of Nightly Private-Room Prices",
+    x = "Nightly price (USD)",
+    y = "Number of listings"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+# Examine the relationship between service fee and nightly price.
+ggplot(ny_rental, aes(x = SERVICE_FEE, y = PRICE)) +
+  geom_point(alpha = 0.45, color = "#2C7FB8") +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "#D95F02"
+  ) +
+  labs(
+    title = "Relationship Between Service Fee and Nightly Price",
+    x = "Service fee (USD)",
+    y = "Nightly price (USD)"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+# Visualize the distribution of minimum-night requirements.
+ggplot(ny_rental, aes(x = factor(MINIMUM_NIGHTS))) +
+  geom_bar(fill = "#41AB5D") +
+  labs(
+    title = "Distribution of Minimum-Stay Requirements",
+    x = "Minimum nights required",
+    y = "Number of listings"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+# Compare cancellation-policy frequency across the selected neighborhoods.
+ggplot(ny_rental, aes(x = NEIGHBORHOOD, fill = CANCELLATION_POLICY)) +
+  geom_bar(position = "dodge") +
+  labs(
+    title = "Cancellation Policy by Neighborhood",
+    x = "Neighborhood",
+    y = "Number of listings",
+    fill = "Cancellation policy"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+```
+
+# Multiple linear regression model
+
+A multiple linear regression model was estimated to evaluate the association between nightly private-room price and service fee, number of reviews, cancellation policy, and minimum-night requirement. Flexible cancellation is used as the reference category, allowing the strict and moderate policy coefficients to be interpreted relative to flexible cancellation.
+
+The model estimates associations within the selected sample and should not be interpreted as evidence of causal effects.
+
+```{r fit-regression-model, results="asis"}
+# Set flexible cancellation as the reference category.
+ny_rental <- ny_rental |>
+  mutate(
+    CANCELLATION_POLICY = factor(
+      CANCELLATION_POLICY,
+      levels = c("flexible", "moderate", "strict")
+    )
+  )
+
+# Estimate the multiple linear regression model.
+ny_rental_lm <- lm(
+  PRICE ~ SERVICE_FEE +
+    NUMBER_OF_REVIEWS +
+    CANCELLATION_POLICY +
+    MINIMUM_NIGHTS,
+  data = ny_rental
+)
+
+# Display the model results.
+stargazer(
+  ny_rental_lm,
+  type = "html",
+  title = "Multiple Linear Regression Results",
+  dep.var.labels = "Nightly Price",
+  covariate.labels = c(
+    "Service Fee",
+    "Number of Reviews",
+    "Cancellation Policy: Moderate",
+    "Cancellation Policy: Strict",
+    "Minimum Nights"
+  ),
+  single.row = TRUE,
+  notes = c(
+      "* p < 0.10; ** p < 0.05; *** p < 0.01"
+  ),
+  notes.append = FALSE
+)
+```
+
+# Model diagnostics
+
+Model diagnostics were conducted to evaluate whether the primary assumptions of ordinary least squares regression were reasonably satisfied. The diagnostics assess residual patterns, normality, influential observations, heteroscedasticity, and multicollinearity.
+
+Because the analytical data are cross-sectional rental listings rather than a time-ordered series, the Durbin–Watson statistic is reported only as a supplementary diagnostic and should be interpreted cautiously.
+
+```{r model-diagnostics, fig.width=10, fig.height=8}
+# Display the four standard diagnostic plots for the fitted regression model.
+par(mfrow = c(2, 2))
+
+plot(
+  ny_rental_lm,
+  cex.axis = 1.5,
+  cex.lab = 1.5,
+  cex.main = 1.5
+)
+
+par(mfrow = c(1, 1))
+
+# Test for heteroscedasticity in the model residuals.
+heteroscedasticity_test <- ncvTest(ny_rental_lm)
+
+# Calculate variance inflation factors to assess multicollinearity.
+vif_results <- vif(ny_rental_lm)
+
+# Run the Durbin-Watson test as a supplementary residual-autocorrelation check.
+durbin_watson_test <- dwtest(ny_rental_lm)
+
+# Display diagnostic test results.
+heteroscedasticity_test
+
+vif_results
+
+durbin_watson_test
+```
+
+# Predictor-price relationships
+
+The following visualizations illustrate selected bivariate relationships between nightly price and the model predictors. They complement the multiple regression results but do not control for the other variables in the model; therefore, they should be interpreted as descriptive rather than adjusted effects.
+
+```{r predictor-price-relationships, fig.width=10, fig.height=7}
+# Create an interactive 3D visualization of price, service fee, and minimum
+# nights, colored by cancellation policy.
+plot_ly(
+  ny_rental,
+  x = ~SERVICE_FEE,
+  y = ~PRICE,
+  z = ~MINIMUM_NIGHTS,
+  color = ~CANCELLATION_POLICY,
+  colors = c("red", "blue", "green"),
+  type = "scatter3d",
+  mode = "markers"
+) %>%
+  layout(
+    title = list(
+      text = "Figure 1. Price vs. Service Fee vs. Minimum Nights by Cancellation Policy",
+      font = list(size = 24),
+      x = 0.5,          
+      xanchor = "center",
+      y = 0.90,         
+      yanchor = "top"
+    ),
+    legend = list(
+    font = list(size = 18), 
+    x = 0.65,    
+    y = 0.5,  
+    xanchor = "left",
+    yanchor = "middle"
+    ),
+    scene = list(
+      xaxis = list(
+        title = list(text = "Service Fee (USD)", font = list(size = 20)),
+        tickfont = list(size = 16)
+      ),
+      yaxis = list(
+        title = list(text = "Nightly Price (USD)", font = list(size = 20)),
+        tickfont = list(size = 16)
+      ),
+      zaxis = list(
+        title = list(text = "Minimum Nights", font = list(size = 20)),
+        tickfont = list(size = 16)
+      )
+    )
+  )
+
+# Examine the relationship between review volume and price by minimum-night requirement.
+ggplot(ny_rental, aes(x = NUMBER_OF_REVIEWS, y = PRICE, color = as.factor(MINIMUM_NIGHTS))) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) + 
+  labs(
+    title = "Figure 2. Price vs. Number of Reviews by Minimum Nights",
+    x = "Number of Reviews",
+    y = "Nightly Price (USD)",
+    color = "Minimum Nights"
+  ) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+    theme(
+    plot.title = element_text(size = 26, face = "bold"),
+    axis.title = element_text(size = 24, face = "bold"),
+    axis.text = element_text(size = 24),
+    legend.title = element_text(size = 24, face = "bold"),
+    legend.text = element_text(size = 24)
+  )
+```
+
+# Effect size and statistical power
+
+Cohen’s (f\^2) was calculated from the model (R\^2) to quantify the overall effect size of the regression model. A post hoc power analysis was then conducted using the number of predictors, residual degrees of freedom, and an alpha level of 0.05.
+
+Because this analysis is based on the observed model fit and sample size, the post hoc power estimate should be interpreted as a descriptive complement to the regression results rather than as evidence that the model specification is adequate.
+
+```{r effect-size-power}
+# Extract model inputs for the effect-size and power calculations.
+model_r_squared <- summary(ny_rental_lm)$r.squared
+number_of_predictors <- length(coef(ny_rental_lm)) - 1
+residual_degrees_freedom <- df.residual(ny_rental_lm)
+
+# Calculate Cohen's f-squared for the overall regression model.
+f_squared <- model_r_squared / (1 - model_r_squared)
+
+# Conduct a post hoc power analysis for the fitted regression model.
+power_results <- pwr.f2.test(
+  u = number_of_predictors,
+  v = residual_degrees_freedom,
+  f2 = f_squared,
+  sig.level = 0.05
+)
+
+# Display the effect-size and power results.
+effect_size_power_summary <- tibble(
+  Metric = c(
+    "R-squared",
+    "Cohen's f-squared",
+    "Number of predictors",
+    "Residual degrees of freedom",
+    "Alpha level",
+    "Post hoc statistical power"
+  ),
+  Value = c(
+    round(model_r_squared, 3),
+    round(f_squared, 3),
+    number_of_predictors,
+    residual_degrees_freedom,
+    0.05,
+    round(power_results$power, 3)
+  )
+)
+
+knitr::kable(
+  effect_size_power_summary,
+  caption = "Overall regression effect size and post hoc power"
+)
+```

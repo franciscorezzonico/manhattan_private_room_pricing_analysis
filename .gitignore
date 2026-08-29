@@ -1,0 +1,30 @@
+# R session and workspace files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# Quarto rendered output and execution cache
+.quarto/
+_freeze/
+*_files/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# RStudio temporary files
+.Rhistory
+.Rapp.history
+
+# Temporary and backup files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Local environment and secrets
+.Renviron
+.Renviron.site
+.env
+.env.*
