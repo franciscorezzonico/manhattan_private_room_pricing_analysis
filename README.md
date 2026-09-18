@@ -1,7 +1,5 @@
 # Manhattan Private-Room Pricing Analysis
 
-> **Executive summary:** This project analyzes factors associated with private-room nightly prices in five Manhattan neighborhoods. In the selected observational sample, service fee showed the strongest positive association with nightly price; however, diagnostic results and the possibility of a mechanical fee–price relationship mean the result should be interpreted as descriptive rather than causal.
-
 An exploratory and multiple linear regression analysis of factors associated with nightly prices for private-room rental listings in selected Manhattan neighborhoods: Midtown, West Village, Nolita, SoHo, and the Upper East Side.
 
 ## Overview
