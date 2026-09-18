@@ -1,5 +1,7 @@
 # Manhattan Private-Room Pricing Analysis
 
+> **Executive summary:** This project analyzes factors associated with private-room nightly prices in five Manhattan neighborhoods. In the selected observational sample, service fee showed the strongest positive association with nightly price; however, diagnostic results and the possibility of a mechanical fee–price relationship mean the result should be interpreted as descriptive rather than causal.
+
 An exploratory and multiple linear regression analysis of factors associated with nightly prices for private-room rental listings in selected Manhattan neighborhoods: Midtown, West Village, Nolita, SoHo, and the Upper East Side.
 
 ## Overview
@@ -27,7 +29,7 @@ How are service fees, number of reviews, cancellation policy, and minimum-night 
 
 ## Key findings
 
-The original model results indicate a strong positive association between service fee and nightly price. The estimated coefficient for service fee is approximately 4.95, meaning that a one-dollar increase in service fee is associated with an estimated 4.95-dollar increase in nightly price, holding the other modeled variables constant.
+The fitted model indicates a strong positive association between service fee and nightly price. The estimated coefficient for service fee is approximately 4.95, meaning that a one-dollar increase in service fee is associated with an estimated 4.95-dollar increase in nightly price, holding the other modeled variables constant.
 
 Number of reviews, cancellation policy, and minimum-night requirements were not statistically significant predictors in the reported model. The model diagnostics indicate that important ordinary least squares assumptions, including homoscedasticity and the absence of influential observations, should be evaluated carefully when interpreting the findings.
 
